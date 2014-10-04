@@ -4,7 +4,13 @@
 	<extension point="org.eclipse.m2e.core.projectConfigurators">
 		<configurator class="com.ianbrandt.tools.m2e.mdp.core.MdpProjectConfigurator"
 				id="com.ianbrandt.tools.m2e.mdp.core.MdpProjectConfigurator"
-				name="Maven Dependency Plugin Project Configurator">
+				name="Maven Dependency Plugin Project Configurator(copy-dependencies,unpack-dependencies)">
+		</configurator>
+	</extension>
+	<extension point="org.eclipse.m2e.core.projectConfigurators">
+		<configurator class="com.coderplus.m2e.dependencycore.CoderPlusProjectConfigurator"
+				id="com.coderplus.m2e.dependencycore.CoderPlusProjectConfigurator"
+				name="Maven Dependency Plugin Project Configurator(copy,unpack)">
 		</configurator>
 	</extension>
 	<extension point="org.eclipse.m2e.core.lifecycleMappingMetadataSource">

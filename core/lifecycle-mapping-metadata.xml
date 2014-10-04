@@ -7,15 +7,29 @@
 				<artifactId>maven-dependency-plugin</artifactId>
 				<versionRange>[1.0,)</versionRange>
 				<goals>
-					<goal>unpack</goal>
 					<goal>unpack-dependencies</goal>
-					<goal>copy</goal>
 					<goal>copy-dependencies</goal>
 				</goals>
 			</pluginExecutionFilter>
 			<action>
 				<configurator>
 					<id>com.ianbrandt.tools.m2e.mdp.core.MdpProjectConfigurator</id>
+				</configurator>
+			</action>
+		</pluginExecution>
+		<pluginExecution>
+			<pluginExecutionFilter>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-dependency-plugin</artifactId>
+				<versionRange>[1.0,)</versionRange>
+				<goals>
+					<goal>unpack</goal>
+					<goal>copy</goal>
+				</goals>
+			</pluginExecutionFilter>
+			<action>
+				<configurator>
+					<id>com.coderplus.m2e.dependencycore.CoderPlusProjectConfigurator</id>
 				</configurator>
 			</action>
 		</pluginExecution>
