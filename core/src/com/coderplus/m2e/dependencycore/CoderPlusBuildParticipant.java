@@ -139,6 +139,8 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 		this.project = getMavenProjectFacade().getMavenProject();
 		this.maven = MavenPlugin.getMaven();
 		this.goal = execution.getGoal();
+		final BuildContext buildContext = getBuildContext();
+
 		final IFile pomFile = (IFile) getMavenProjectFacade().getProject().findMember("pom.xml");
 		// skipping the build if it's neither a full Build nor  pom.xml has changed
 		if(kind != IncrementalProjectBuilder.FULL_BUILD && !buildContext.hasDelta(pomFile.getLocation().toFile())) {
@@ -180,7 +182,9 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 				getArtifactIdMethod = new  PropertyDescriptor(ARTIFACT_ID, artifactItem.getClass()).getReadMethod();
 				getGroupIdMethod = new  PropertyDescriptor(GROUP_ID, artifactItem.getClass()).getReadMethod();
 				getVersionMethod = new  PropertyDescriptor(VERSION, artifactItem.getClass()).getReadMethod();
-				getBaseVersionMethod = new  PropertyDescriptor(BASE_VERSION, artifactItem.getClass()).getReadMethod();
+				if(useBaseVersion){
+					getBaseVersionMethod = new  PropertyDescriptor(BASE_VERSION, artifactItem.getClass()).getReadMethod();
+				}
 				getTypeMethod = new  PropertyDescriptor(TYPE, artifactItem.getClass()).getReadMethod();
 				getClassifierMethod = new  PropertyDescriptor(CLASSIFIER, artifactItem.getClass()).getReadMethod();
 				getDestFileNameMethod= new  PropertyDescriptor(DEST_FILE_NAME, artifactItem.getClass()).getReadMethod();
@@ -194,7 +198,9 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 			_artifactItem.setArtifactId((String) getArtifactIdMethod.invoke(artifactItem));
 			_artifactItem.setGroupId((String) getGroupIdMethod.invoke(artifactItem));
 			_artifactItem.setVersion((String) getVersionMethod.invoke(artifactItem));
-			_artifactItem.setBaseVersion((String) getBaseVersionMethod.invoke(artifactItem));
+			if(useBaseVersion){
+				_artifactItem.setBaseVersion((String) getBaseVersionMethod.invoke(artifactItem));
+			}
 			String type = (String) getTypeMethod.invoke(artifactItem);
 			if(StringUtils.isNotEmpty(type)){
 				_artifactItem.setType(type);
@@ -233,7 +239,6 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 		}
 
 		//refresh the output directories
-		final BuildContext buildContext = getBuildContext();
 		for(File refreshableDirectory: refreshableDirectories){
 			buildContext.refresh(refreshableDirectory);
 		}
@@ -458,7 +463,7 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 			}
 			//wasn't able to properly instantiate the DefaultPlexusContainer, hence using specific unarchivers instead of looking up from the Container.
 			AbstractUnArchiver unArchiver = null;
-			
+
 			if(checkType(JAR,artifact.getType(),file) || checkType(ZIP,artifact.getType(),file)  || checkType(WAR,artifact.getType(),file) || checkType(EAR,artifact.getType(),file)){
 
 				unArchiver = new ZipUnArchiver(file);
@@ -486,13 +491,13 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 			} else{
 				new Exception("Couldn't find a suitable unarchiver for "+artifact.getType()+" or "+artifact.getFile().getAbsolutePath());
 			}
-			
+
 			unArchiver.setUseJvmChmod( useJvmChmod );
 			unArchiver.setIgnorePermissions( ignorePermissions );
 			unArchiver.setSourceFile( file );
 			unArchiver.setDestDirectory( location );
 			unArchiver.enableLogging(new ConsoleLogger(ConsoleLogger.LEVEL_DEBUG,"Logger"));
-			
+
 			if ( StringUtils.isNotEmpty( excludes ) || StringUtils.isNotEmpty( includes ) )
 			{
 				IncludeExcludeFileSelector[] selectors =
