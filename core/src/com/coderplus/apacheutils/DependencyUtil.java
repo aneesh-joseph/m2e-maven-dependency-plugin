@@ -1,4 +1,4 @@
-package org.apache.maven.plugin.dependency.utils;
+package com.coderplus.apacheutils;
 
 /*
  * Licensed to the Apache Software Foundation (ASF) under one

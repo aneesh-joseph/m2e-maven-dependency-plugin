@@ -15,7 +15,9 @@
 package com.coderplus.m2e.dependencycore;
 import java.beans.PropertyDescriptor;
 import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Method;
+import java.net.MalformedURLException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -24,24 +26,34 @@ import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.artifact.InvalidRepositoryException;
 import org.apache.maven.artifact.handler.DefaultArtifactHandler;
 import org.apache.maven.artifact.repository.ArtifactRepository;
+import org.apache.maven.artifact.repository.DefaultArtifactRepository;
 import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.versioning.InvalidVersionSpecificationException;
 import org.apache.maven.artifact.versioning.VersionRange;
 import org.apache.maven.model.Dependency;
 import org.apache.maven.plugin.MojoExecution;
+import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.dependency.fromConfiguration.ArtifactItem;
 import org.apache.maven.plugin.dependency.fromConfiguration.ProcessArtifactItemsRequest;
-import org.apache.maven.plugin.dependency.utils.DependencyUtil;
+import org.apache.maven.project.DefaultMavenProjectBuilder;
 import org.apache.maven.project.MavenProject;
+import org.apache.maven.project.MavenProjectBuilder;
+import org.apache.maven.project.ProjectBuildingException;
 import org.apache.maven.repository.RepositorySystem;
+import org.apache.maven.shared.artifact.filter.collection.ArtifactFilterException;
+import org.apache.maven.shared.artifact.filter.collection.ArtifactIdFilter;
+import org.apache.maven.shared.artifact.filter.collection.ClassifierFilter;
+import org.apache.maven.shared.artifact.filter.collection.FilterArtifacts;
+import org.apache.maven.shared.artifact.filter.collection.GroupIdFilter;
+import org.apache.maven.shared.artifact.filter.collection.ProjectTransitivityFilter;
+import org.apache.maven.shared.artifact.filter.collection.ScopeFilter;
+import org.apache.maven.shared.artifact.filter.collection.TypeFilter;
 import org.codehaus.plexus.ContainerConfiguration;
 import org.codehaus.plexus.DefaultContainerConfiguration;
 import org.codehaus.plexus.DefaultPlexusContainer;
 import org.codehaus.plexus.PlexusConstants;
-import org.codehaus.plexus.PlexusContainerException;
 import org.codehaus.plexus.archiver.AbstractUnArchiver;
 import org.codehaus.plexus.archiver.bzip2.BZip2UnArchiver;
 import org.codehaus.plexus.archiver.gzip.GZipUnArchiver;
@@ -49,7 +61,6 @@ import org.codehaus.plexus.archiver.tar.TarBZip2UnArchiver;
 import org.codehaus.plexus.archiver.tar.TarGZipUnArchiver;
 import org.codehaus.plexus.archiver.tar.TarUnArchiver;
 import org.codehaus.plexus.archiver.zip.ZipUnArchiver;
-import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
 import org.codehaus.plexus.components.io.fileselectors.IncludeExcludeFileSelector;
 import org.codehaus.plexus.logging.console.ConsoleLogger;
 import org.codehaus.plexus.util.FileUtils;
@@ -65,10 +76,30 @@ import org.eclipse.m2e.core.embedder.IMaven;
 import org.eclipse.m2e.core.project.configurator.MojoExecutionBuildParticipant;
 import org.sonatype.plexus.build.incremental.BuildContext;
 
+import com.coderplus.apacheutils.DependencyStatusSets;
+import com.coderplus.apacheutils.DependencyUtil;
+import com.coderplus.apacheutils.translators.ClassifierTypeTranslator;
+import com.coderplus.apacheutils.translators.resolvers.DefaultArtifactsResolver;
+
 public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 
 
 
+	private static final String FAIL_ON_MISSING_CLASSIFIER_ARTIFACT = "failOnMissingClassifierArtifact";
+	private static final String USE_REPOSITORY_LAYOUT = "useRepositoryLayout";
+	private static final String USE_SUB_DIRECTORY_PER_ARTIFACT = "useSubDirectoryPerArtifact";
+	private static final String USE_SUB_DIRECTORY_PER_TYPE = "useSubDirectoryPerType";
+	private static final String COPY_POM = "copyPom";
+	private static final String EXCLUDE_ARTIFACT_IDS = "excludeArtifactIds";
+	private static final String INCLUDE_ARTIFACT_IDS = "includeArtifactIds";
+	private static final String EXCLUDE_GROUP_IDS = "excludeGroupIds";
+	private static final String INCLUDE_GROUP_IDS = "includeGroupIds";
+	private static final String EXCLUDE_CLASSIFIERS = "excludeClassifiers";
+	private static final String INCLUDE_CLASSIFIERS = "includeClassifiers";
+	private static final String EXCLUDE_TYPES = "excludeTypes";
+	private static final String INCLUDE_TYPES = "includeTypes";
+	private static final String EXCLUDE_SCOPE = "excludeScope";
+	private static final String INCLUDE_SCOPE = "includeScope";
 	private static final String TAR = "tar";
 	private static final String TAR_BZ2 = "tar.bz2";
 	private static final String TRUE = "true";
@@ -95,6 +126,8 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 	private static final String ARTIFACT_ITEMS_PROPERTY = "artifactItems";
 	private static final String GLOBAL_OUTPUT_DIRECTORY_PROPERTY = "outputDirectory";
 	private static final String COPY_GOAL = "copy";
+	private static final String COPY_DEPENDENCIES_GOAL = "copy-dependencies";
+	private static final String UNPACK_DEPENDENCIES_GOAL = "unpack-dependencies";
 	private static final String UNPACK_GOAL = "unpack";
 	private static final String JAR = "jar";
 	private static final String ZIP = "zip";
@@ -123,6 +156,25 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 	private boolean useJvmChmod;
 	private String goal;
 	private Set<File> refreshableDirectories = new HashSet<File>();
+	private boolean excludeTransitive;
+	private String includeScope;
+	private String excludeScope;
+	private String includeTypes;
+	private String excludeTypes;
+	private String includeClassifiers;
+	private String excludeClassifiers;
+	private String includeGroupIds;
+	private String excludeGroupIds;
+	private String includeArtifactIds;
+	private String excludeArtifactIds;
+	private String classifier;
+	private String type;
+	private boolean useSubDirectoryPerScope;
+	private boolean useSubDirectoryPerType;
+	private boolean useSubDirectoryPerArtifact;
+	private boolean useRepositoryLayout;
+	private boolean failOnMissingClassifierArtifact;
+	private boolean copyPom;
 	public CoderPlusBuildParticipant(MojoExecution execution) {
 
 		super(execution, true);
@@ -163,79 +215,171 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 		this.stripVersion =  Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, STRIP_VERSION,Boolean.class, new NullProgressMonitor()));
 		this.useBaseVersion =  Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, USE_BASE_VERSION,Boolean.class, new NullProgressMonitor()));
 		this.stripClassifier =  Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, STRIP_CLASSIFIER,Boolean.class, new NullProgressMonitor()));
+		this.useSubDirectoryPerScope = Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, STRIP_CLASSIFIER,Boolean.class, new NullProgressMonitor()));
+		this.useSubDirectoryPerType = Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, USE_SUB_DIRECTORY_PER_TYPE,Boolean.class, new NullProgressMonitor()));
+		this.useSubDirectoryPerArtifact = Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, USE_SUB_DIRECTORY_PER_ARTIFACT,Boolean.class, new NullProgressMonitor()));
+		this.useRepositoryLayout = Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, USE_REPOSITORY_LAYOUT,Boolean.class, new NullProgressMonitor()));
+		this.failOnMissingClassifierArtifact = Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, FAIL_ON_MISSING_CLASSIFIER_ARTIFACT,Boolean.class, new NullProgressMonitor()));
+
 		this.excludes = maven.getMojoParameterValue(project, execution, EXCLUDES,String.class, new NullProgressMonitor());
 		this.includes = maven.getMojoParameterValue(project, execution, INCLUDES,String.class, new NullProgressMonitor());
 		this.ignorePermissions =  Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, IGNORE_PERMISSIONS,Boolean.class, new NullProgressMonitor()));
+		this.copyPom =  Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, COPY_POM,Boolean.class, new NullProgressMonitor()));
 		this.useJvmChmod =  Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, USE_JVM_CHMOD,Boolean.class, new NullProgressMonitor()));
+		this.includeScope = maven.getMojoParameterValue(project, execution, INCLUDE_SCOPE,String.class, new NullProgressMonitor());
+		this.excludeScope = maven.getMojoParameterValue(project, execution, EXCLUDE_SCOPE,String.class, new NullProgressMonitor());
+		this.includeTypes = maven.getMojoParameterValue(project, execution, INCLUDE_TYPES,String.class, new NullProgressMonitor());
+		this.excludeTypes = maven.getMojoParameterValue(project, execution, EXCLUDE_TYPES,String.class, new NullProgressMonitor());
+		this.includeClassifiers = maven.getMojoParameterValue(project, execution, INCLUDE_CLASSIFIERS,String.class, new NullProgressMonitor());
+		this.excludeClassifiers = maven.getMojoParameterValue(project, execution, EXCLUDE_CLASSIFIERS,String.class, new NullProgressMonitor());
+		this.includeGroupIds = maven.getMojoParameterValue(project, execution, INCLUDE_GROUP_IDS,String.class, new NullProgressMonitor());
+		this.excludeGroupIds = maven.getMojoParameterValue(project, execution, EXCLUDE_GROUP_IDS,String.class, new NullProgressMonitor());
+		this.includeArtifactIds = maven.getMojoParameterValue(project, execution, INCLUDE_ARTIFACT_IDS,String.class, new NullProgressMonitor());
+		this.excludeArtifactIds = maven.getMojoParameterValue(project, execution, EXCLUDE_ARTIFACT_IDS,String.class, new NullProgressMonitor());	
+		this.classifier = maven.getMojoParameterValue(project, execution, CLASSIFIER,String.class, new NullProgressMonitor());
+		String temp=maven.getMojoParameterValue(project, execution, TYPE,String.class, new NullProgressMonitor());
+		this.type = temp!=null? temp:"";
 
 
-		final List artifactItems = maven.getMojoParameterValue(project, execution, ARTIFACT_ITEMS_PROPERTY,
-				List.class, new NullProgressMonitor());
-		//gathering the artifact details using reflection
-		Method getOutputDirectoryMethod = null, getArtifactIdMethod=null,getGroupIdMethod=null,getVersionMethod=null,getTypeMethod=null,
-				getClassifierMethod=null,getDestFileNameMethod=null,getOverWriteMethod=null,getBaseVersionMethod=null,getExcludesMethod=null,
-				getIncludesMethod=null;
 
-		for (Object artifactItem : artifactItems) {
-			if (getOutputDirectoryMethod == null) {
-				getOutputDirectoryMethod = new PropertyDescriptor(GLOBAL_OUTPUT_DIRECTORY_PROPERTY, artifactItem.getClass()).getReadMethod();
-				getArtifactIdMethod = new  PropertyDescriptor(ARTIFACT_ID, artifactItem.getClass()).getReadMethod();
-				getGroupIdMethod = new  PropertyDescriptor(GROUP_ID, artifactItem.getClass()).getReadMethod();
-				getVersionMethod = new  PropertyDescriptor(VERSION, artifactItem.getClass()).getReadMethod();
+		if(COPY_GOAL.equals(goal)||UNPACK_GOAL.equals(goal)){
+			final List artifactItems = maven.getMojoParameterValue(project, execution, ARTIFACT_ITEMS_PROPERTY,
+					List.class, new NullProgressMonitor());
+			//gathering the artifact details using reflection
+			Method getOutputDirectoryMethod = null, getArtifactIdMethod=null,getGroupIdMethod=null,getVersionMethod=null,getTypeMethod=null,
+					getClassifierMethod=null,getDestFileNameMethod=null,getOverWriteMethod=null,getBaseVersionMethod=null,getExcludesMethod=null,
+					getIncludesMethod=null;
+
+			for (Object artifactItem : artifactItems) {
+				if (getOutputDirectoryMethod == null) {
+					getOutputDirectoryMethod = new PropertyDescriptor(GLOBAL_OUTPUT_DIRECTORY_PROPERTY, artifactItem.getClass()).getReadMethod();
+					getArtifactIdMethod = new  PropertyDescriptor(ARTIFACT_ID, artifactItem.getClass()).getReadMethod();
+					getGroupIdMethod = new  PropertyDescriptor(GROUP_ID, artifactItem.getClass()).getReadMethod();
+					getVersionMethod = new  PropertyDescriptor(VERSION, artifactItem.getClass()).getReadMethod();
+					if(useBaseVersion){
+						getBaseVersionMethod = new  PropertyDescriptor(BASE_VERSION, artifactItem.getClass()).getReadMethod();
+					}
+					getTypeMethod = new  PropertyDescriptor(TYPE, artifactItem.getClass()).getReadMethod();
+					getClassifierMethod = new  PropertyDescriptor(CLASSIFIER, artifactItem.getClass()).getReadMethod();
+					getDestFileNameMethod= new  PropertyDescriptor(DEST_FILE_NAME, artifactItem.getClass()).getReadMethod();
+					getOverWriteMethod = new  PropertyDescriptor(OVER_WRITE, artifactItem.getClass()).getReadMethod();
+					getIncludesMethod=new  PropertyDescriptor(INCLUDES, artifactItem.getClass()).getReadMethod();
+					getExcludesMethod=new  PropertyDescriptor(EXCLUDES, artifactItem.getClass()).getReadMethod();
+				}
+
+				ArtifactItem _artifactItem = new ArtifactItem();
+				_artifactItem.setOutputDirectory((File) getOutputDirectoryMethod.invoke(artifactItem));
+				_artifactItem.setArtifactId((String) getArtifactIdMethod.invoke(artifactItem));
+				_artifactItem.setGroupId((String) getGroupIdMethod.invoke(artifactItem));
+				_artifactItem.setVersion((String) getVersionMethod.invoke(artifactItem));
 				if(useBaseVersion){
-					getBaseVersionMethod = new  PropertyDescriptor(BASE_VERSION, artifactItem.getClass()).getReadMethod();
+					_artifactItem.setBaseVersion((String) getBaseVersionMethod.invoke(artifactItem));
 				}
-				getTypeMethod = new  PropertyDescriptor(TYPE, artifactItem.getClass()).getReadMethod();
-				getClassifierMethod = new  PropertyDescriptor(CLASSIFIER, artifactItem.getClass()).getReadMethod();
-				getDestFileNameMethod= new  PropertyDescriptor(DEST_FILE_NAME, artifactItem.getClass()).getReadMethod();
-				getOverWriteMethod = new  PropertyDescriptor(OVER_WRITE, artifactItem.getClass()).getReadMethod();
-				getIncludesMethod=new  PropertyDescriptor(INCLUDES, artifactItem.getClass()).getReadMethod();
-				getExcludesMethod=new  PropertyDescriptor(EXCLUDES, artifactItem.getClass()).getReadMethod();
-			}
-
-			ArtifactItem _artifactItem = new ArtifactItem();
-			_artifactItem.setOutputDirectory((File) getOutputDirectoryMethod.invoke(artifactItem));
-			_artifactItem.setArtifactId((String) getArtifactIdMethod.invoke(artifactItem));
-			_artifactItem.setGroupId((String) getGroupIdMethod.invoke(artifactItem));
-			_artifactItem.setVersion((String) getVersionMethod.invoke(artifactItem));
-			if(useBaseVersion){
-				_artifactItem.setBaseVersion((String) getBaseVersionMethod.invoke(artifactItem));
-			}
-			String type = (String) getTypeMethod.invoke(artifactItem);
-			if(StringUtils.isNotEmpty(type)){
-				_artifactItem.setType(type);
-			}
-			_artifactItem.setClassifier((String) getClassifierMethod.invoke(artifactItem));
-			_artifactItem.setDestFileName((String) getDestFileNameMethod.invoke(artifactItem));
-			_artifactItem.setOverWrite((String) getOverWriteMethod.invoke(artifactItem));
-			_artifactItem.setIncludes((String) getIncludesMethod.invoke(artifactItem));
-			_artifactItem.setExcludes((String) getExcludesMethod.invoke(artifactItem));
-			_artifactItems.add(_artifactItem);
-		}
-
-		//processing and resolving the artifacts using the aether framework
-		List<ArtifactItem> theArtifactItems = getProcessedArtifactItems(new ProcessArtifactItemsRequest( stripVersion, prependGroupId, useBaseVersion, stripClassifier ) );
-
-		for ( ArtifactItem artifactItem : theArtifactItems )
-		{
-			if ( artifactItem.isNeedsProcessing() )
-			{
-				if(COPY_GOAL.equals(goal)){
-					//if copy, then copy the artifact
-					copyArtifact( artifactItem );
-
-				} else if(UNPACK_GOAL.equals(goal)){
-					//if unpack, then unpack the artifact using plexus unarchivers.
-					unpack(artifactItem.getArtifact(),artifactItem.getOutputDirectory(), artifactItem.getIncludes(),artifactItem.getExcludes() );
+				String type = (String) getTypeMethod.invoke(artifactItem);
+				if(StringUtils.isNotEmpty(type)){
+					_artifactItem.setType(type);
 				}
-				//add the output directory to the set to be refreshed.
-				refreshableDirectories.add(artifactItem.getOutputDirectory());
+				_artifactItem.setClassifier((String) getClassifierMethod.invoke(artifactItem));
+				_artifactItem.setDestFileName((String) getDestFileNameMethod.invoke(artifactItem));
+				_artifactItem.setOverWrite((String) getOverWriteMethod.invoke(artifactItem));
+				_artifactItem.setIncludes((String) getIncludesMethod.invoke(artifactItem));
+				_artifactItem.setExcludes((String) getExcludesMethod.invoke(artifactItem));
+				_artifactItems.add(_artifactItem);
 			}
-			else
-			{
 
-				//do nothing
+			//processing and resolving the artifacts using the aether framework
+			List<ArtifactItem> theArtifactItems = getProcessedArtifactItems(new ProcessArtifactItemsRequest( stripVersion, prependGroupId, useBaseVersion, stripClassifier ) );
+
+			for ( ArtifactItem artifactItem : theArtifactItems )
+			{
+				if ( artifactItem.isNeedsProcessing() )
+				{
+					if(COPY_GOAL.equals(goal)){
+						//if copy, then copy the artifact
+						copyArtifact( artifactItem );
+
+					} else if(UNPACK_GOAL.equals(goal)){
+						//if unpack, then unpack the artifact using plexus unarchivers.
+						unpack(artifactItem.getArtifact(),artifactItem.getOutputDirectory(), artifactItem.getIncludes(),artifactItem.getExcludes() );
+					}
+					//add the output directory to the set to be refreshed.
+					refreshableDirectories.add(artifactItem.getOutputDirectory());
+				}
+				else
+				{
+
+					//do nothing
+				}
 			}
+
+		} else if(UNPACK_DEPENDENCIES_GOAL.equals(goal) || COPY_DEPENDENCIES_GOAL.equals(goal)) {
+
+			DependencyStatusSets dss = getDependencySets( this.failOnMissingClassifierArtifact );
+			if(UNPACK_DEPENDENCIES_GOAL.equals(goal)){
+				for ( Artifact artifact : dss.getResolvedDependencies() )
+				{
+					File destDir;
+					destDir = DependencyUtil.getFormattedOutputDirectory( this.useSubDirectoryPerScope, this.useSubDirectoryPerType,
+							this.useSubDirectoryPerArtifact, this.useRepositoryLayout,
+							stripVersion, this.globalOutputDirectory, artifact );
+					unpack( artifact, destDir, includes, excludes );
+				}
+
+				for ( Artifact artifact : dss.getSkippedDependencies() )
+				{
+					// getLog().info( artifact.getFile().getName() + " already exists in destination." );
+				}
+			} else {
+				//copy dependencies
+				Set<Artifact> artifacts = dss.getResolvedDependencies();
+
+				if ( !useRepositoryLayout )
+				{
+					for ( Artifact artifact : artifacts )
+					{
+						copyArtifact( artifact, stripVersion, this.prependGroupId, this.useBaseVersion,
+								this.stripClassifier );
+					}
+				}
+				else
+				{
+					try
+					{
+						ContainerConfiguration config = new DefaultContainerConfiguration();
+						config.setAutoWiring( true );
+						config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
+						RepositorySystem system =new DefaultPlexusContainer( config ).lookup( RepositorySystem.class );
+
+						ArtifactRepository targetRepository = system.createArtifactRepository( "local", globalOutputDirectory.toURL().toExternalForm(),  maven.getLocalRepository().getLayout(), maven.getLocalRepository().getSnapshots(),  maven.getLocalRepository().getReleases() );
+
+						for ( Artifact artifact : artifacts )
+						{
+							installArtifact( artifact, targetRepository );
+						}
+					}
+					catch ( MalformedURLException e )
+					{
+						throw new MojoExecutionException( "Could not create outputDirectory repository", e );
+					}
+				}
+
+				Set<Artifact> skippedArtifacts = dss.getSkippedDependencies();
+				for ( Artifact artifact : skippedArtifacts )
+				{
+					// getLog().info( artifact.getId() + " already exists in destination." ) ;
+				}
+
+				if ( copyPom && !useRepositoryLayout )
+				{
+					copyPoms( globalOutputDirectory, artifacts, this.stripVersion );
+					copyPoms( globalOutputDirectory, skippedArtifacts,
+							this.stripVersion, this.stripClassifier );  // Artifacts that already exist may not yet have poms
+				}
+
+			}
+
+			refreshableDirectories.add(globalOutputDirectory);
+
 		}
 
 		//refresh the output directories
@@ -247,19 +391,53 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 	}
 
 
-	private void copyArtifact(ArtifactItem artifactItem) throws Exception {
-		File destFile = new File( artifactItem.getOutputDirectory(), artifactItem.getDestFileName() );
-		File srcFile = artifactItem.getArtifact().getFile();
-		//In case eclipse resolves the artifact to the outputDirectory of a workspace project, just ignore it and get the stuff from the local repo.
-		if(srcFile.isDirectory()){
-			srcFile = new File(maven.getLocalRepository().getBasedir(),maven.getLocalRepository().pathOf(artifactItem.getArtifact()));
-		}
+	private void copyPoms(File globalOutputDirectory2, Set<Artifact> skippedArtifacts, boolean stripVersion2,
+			boolean stripClassifier2) {
+		// TODO Auto-generated method stub
 
+	}
+
+	private void copyPoms(File globalOutputDirectory2, Set<Artifact> artifacts, boolean stripVersion2) {
+		// TODO Auto-generated method stub
+
+	}
+
+	private void installArtifact(Artifact artifact, ArtifactRepository targetRepository) {
+		// TODO Auto-generated method stub
+
+	}
+
+	private void copyArtifact(Artifact artifact, boolean stripVersion2, boolean prependGroupId2,
+			boolean useBaseVersion2, boolean stripClassifier2) throws Exception {
+		String destFileName = DependencyUtil.getFormattedFileName( artifact, stripVersion2, prependGroupId2, 
+				useBaseVersion2, stripClassifier2 );
+
+		File destDir;
+		destDir = DependencyUtil.getFormattedOutputDirectory( useSubDirectoryPerScope, useSubDirectoryPerType,
+				useSubDirectoryPerArtifact, useRepositoryLayout,
+				stripVersion, globalOutputDirectory, artifact );
+		File destFile = new File( destDir, destFileName );
+
+		copyFile(artifact.getFile(),destFile,artifact);
+
+	}
+
+	private void copyFile(File srcFile,File destFile, Artifact artifact) throws Exception{
+		if(srcFile.isDirectory()){
+			srcFile = new File(maven.getLocalRepository().getBasedir(),maven.getLocalRepository().pathOf(artifact));
+		}
 		if(srcFile.exists()){
 			FileUtils.copyFile(srcFile, destFile );
 		} else {
-			throw new Exception("Unable to resolve artifact"+artifactItem.toString());
+			throw new Exception("Unable to resolve artifact"+artifact.getGroupId()+":"+artifact.getArtifactId()+":"+artifact.getVersion());
 		}
+
+	}
+
+	private void copyArtifact(ArtifactItem artifactItem) throws Exception {
+
+		copyFile(artifactItem.getArtifact().getFile(),new File( artifactItem.getOutputDirectory(), artifactItem.getDestFileName() ),artifactItem.getArtifact());
+
 	}
 
 
@@ -353,7 +531,7 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 
 	}
 
-	private Artifact getArtifact(ArtifactItem artifactItem) throws CoreException, InvalidRepositoryException, ComponentLookupException, PlexusContainerException {
+	private Artifact getArtifact(ArtifactItem artifactItem) throws Exception {
 
 		Artifact artifact = null;
 		VersionRange vr;
@@ -382,16 +560,7 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 		ArtifactResolutionRequest request = new ArtifactResolutionRequest();
 		request.setArtifact(artifact);
 		request.setRemoteRepositories(maven.getArtifactRepositories());
-		ArtifactRepository localRepo = maven.getLocalRepository();
-		if ( this.localRepositoryDirectory != null )
-		{
-			// create a new local repo using existing layout, snapshots, and releases policy
-			String url = "file://" + this.localRepositoryDirectory.getAbsolutePath();
-			localRepo = system.createArtifactRepository( localRepo.getId(), url, localRepo.getLayout(),localRepo.getSnapshots(), localRepo.getReleases() );
-
-		}
-
-		request.setLocalRepository(localRepo);
+		request.setLocalRepository(getLocal());
 		//resolve the artifact
 		system.resolve(request);
 		return artifact;
@@ -533,4 +702,220 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 	}
 
 
+	/**
+	 * Method creates filters and filters the projects dependencies. This method
+	 * also transforms the dependencies if classifier is set. The dependencies
+	 * are filtered in least specific to most specific order
+	 *
+	 * @param stopOnFailure
+	 * @return DependencyStatusSets - Bean of TreeSets that contains information
+	 *         on the projects dependencies
+	 * @throws Exception 
+	 */
+	protected DependencyStatusSets getDependencySets( boolean stopOnFailure, boolean includeParents )
+			throws Exception
+	{
+		// add filters in well known order, least specific to most specific
+		FilterArtifacts filter = new FilterArtifacts();
+
+		filter.addFilter( new ProjectTransitivityFilter( project.getDependencyArtifacts(), this.excludeTransitive ) );
+
+		filter.addFilter( new ScopeFilter( DependencyUtil.cleanToBeTokenizedString( this.includeScope ),
+				DependencyUtil.cleanToBeTokenizedString( this.excludeScope ) ) );
+
+		filter.addFilter( new TypeFilter( DependencyUtil.cleanToBeTokenizedString( this.includeTypes ),
+				DependencyUtil.cleanToBeTokenizedString( this.excludeTypes ) ) );
+
+		filter.addFilter( new ClassifierFilter( DependencyUtil.cleanToBeTokenizedString( this.includeClassifiers ),
+				DependencyUtil.cleanToBeTokenizedString( this.excludeClassifiers ) ) );
+
+		filter.addFilter( new GroupIdFilter( DependencyUtil.cleanToBeTokenizedString( this.includeGroupIds ),
+				DependencyUtil.cleanToBeTokenizedString( this.excludeGroupIds ) ) );
+
+		filter.addFilter( new ArtifactIdFilter( DependencyUtil.cleanToBeTokenizedString( this.includeArtifactIds ),
+				DependencyUtil.cleanToBeTokenizedString( this.excludeArtifactIds ) ) );
+
+		// start with all artifacts.
+		@SuppressWarnings( "unchecked" ) Set<Artifact> artifacts = project.getArtifacts();
+
+		if ( includeParents )
+		{
+			// add dependencies parents
+			for ( Artifact dep : new ArrayList<Artifact>( artifacts ) )
+			{
+				addParentArtifacts( buildProjectFromArtifact( dep ), artifacts );
+			}
+
+			// add current project parent
+			addParentArtifacts( project, artifacts );
+		}
+
+		// perform filtering
+		try
+		{
+			artifacts = filter.filter( artifacts );
+		}
+		catch ( ArtifactFilterException e )
+		{
+			throw new MojoExecutionException( e.getMessage(), e );
+		}
+
+		// transform artifacts if classifier is set
+		DependencyStatusSets status;
+		if ( StringUtils.isNotEmpty( this.classifier ) )
+		{
+			status = getClassifierTranslatedDependencies( artifacts, stopOnFailure );
+		}
+		else
+		{
+			status = filterMarkedDependencies( artifacts );
+		}
+
+		return status;
+	}
+
+	@SuppressWarnings("deprecation")
+	private MavenProject buildProjectFromArtifact( Artifact artifact )
+			throws MojoExecutionException, Exception
+	{
+		try
+		{
+
+			MavenProjectBuilder projectBuilder = new DefaultMavenProjectBuilder();
+			return projectBuilder.buildFromRepository( artifact, maven.getArtifactRepositories(), getLocal() );
+		}
+		catch ( ProjectBuildingException e )
+		{
+			throw new MojoExecutionException( e.getMessage(), e );
+		}
+	}
+
+
+	private ArtifactRepository getLocal() throws Exception {
+		ContainerConfiguration config = new DefaultContainerConfiguration();
+		config.setAutoWiring( true );
+		config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
+		RepositorySystem system =new DefaultPlexusContainer( config ).lookup( RepositorySystem.class );
+		ArtifactResolutionRequest request = new ArtifactResolutionRequest();
+		request.setArtifact(project.getArtifact());
+		request.setRemoteRepositories(maven.getArtifactRepositories());
+		ArtifactRepository localRepo = maven.getLocalRepository();
+		if ( this.localRepositoryDirectory != null )
+		{
+			// create a new local repo using existing layout, snapshots, and releases policy
+			String url = "file://" + this.localRepositoryDirectory.getAbsolutePath();
+			localRepo = system.createArtifactRepository( localRepo.getId(), url, localRepo.getLayout(),localRepo.getSnapshots(), localRepo.getReleases() );
+
+		}
+		return localRepo;
+	}
+
+	private void addParentArtifacts( MavenProject project, Set<Artifact> artifacts )
+			throws MojoExecutionException, Exception
+	{
+		while ( project.hasParent() )
+		{
+			project = project.getParent();
+
+			if ( project.getArtifact() == null )
+			{	VersionRange vr;
+			try
+			{
+				vr = VersionRange.createFromVersionSpec( project.getVersion() );
+			}
+			catch ( InvalidVersionSpecificationException e1 )
+			{
+				e1.printStackTrace();
+				vr = VersionRange.createFromVersion( project.getVersion() );
+			}
+			// Maven 2.x bug
+			Artifact artifact =	 new DefaultArtifact( project.getGroupId(), project.getArtifactId(),vr,Artifact.SCOPE_COMPILE,project.getPackaging(),null,new DefaultArtifactHandler(project.getPackaging()));
+			project.setArtifact( artifact );
+			}
+
+			if ( !artifacts.add( project.getArtifact() ) )
+			{
+				// artifact already in the set
+				break;
+			}
+			try
+			{
+				ContainerConfiguration config = new DefaultContainerConfiguration();
+				config.setAutoWiring( true );
+				config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
+				RepositorySystem system =new DefaultPlexusContainer( config ).lookup( RepositorySystem.class );
+				ArtifactResolutionRequest request = new ArtifactResolutionRequest();
+				request.setArtifact(project.getArtifact());
+				request.setRemoteRepositories(maven.getArtifactRepositories());
+				request.setLocalRepository(getLocal());
+				//resolve the artifact
+				system.resolve(request);
+
+
+			}
+			catch ( Exception e )
+			{
+				throw new MojoExecutionException( "Unable to resolve artifact "+e.getMessage(), e );
+			}
+
+		}
+	}
+
+	protected DependencyStatusSets getClassifierTranslatedDependencies( Set<Artifact> artifacts, boolean stopOnFailure )
+			throws  Exception
+	{
+		Set<Artifact> unResolvedArtifacts = new HashSet<Artifact>();
+		Set<Artifact> resolvedArtifacts = artifacts;
+		DependencyStatusSets status = new DependencyStatusSets();
+
+		// possibly translate artifacts into a new set of artifacts based on the
+		// classifier and type
+		// if this did something, we need to resolve the new artifacts
+		if ( StringUtils.isNotEmpty( classifier ) )
+		{
+			ClassifierTypeTranslator translator = new ClassifierTypeTranslator( this.classifier, this.type);
+			artifacts = translator.translate( artifacts);
+
+			status = filterMarkedDependencies( artifacts );
+
+			// the unskipped artifacts are in the resolved set.
+			artifacts = status.getResolvedDependencies();
+
+			// resolve the rest of the artifacts
+			DefaultArtifactsResolver artifactsResolver =
+					new DefaultArtifactsResolver(this.getLocal(), maven.getArtifactRepositories(), stopOnFailure );
+			resolvedArtifacts = artifactsResolver.resolve( artifacts);
+
+			// calculate the artifacts not resolved.
+			unResolvedArtifacts.addAll( artifacts );
+			unResolvedArtifacts.removeAll( resolvedArtifacts );
+		}
+
+		// return a bean of all 3 sets.
+		status.setResolvedDependencies( resolvedArtifacts );
+		status.setUnResolvedDependencies( unResolvedArtifacts );
+
+		return status;
+	}
+
+
+	/**
+	 * Filter the marked dependencies
+	 *
+	 * @param artifacts
+	 * @return
+	 * @throws MojoExecutionException
+	 */
+	protected DependencyStatusSets filterMarkedDependencies( Set<Artifact> artifacts )
+			throws MojoExecutionException
+	{
+		//ok, don't filter anything based on markers
+		return new DependencyStatusSets( artifacts, null, new HashSet<Artifact>() );
+	}
+
+	protected DependencyStatusSets getDependencySets( boolean stopOnFailure )
+			throws Exception
+	{
+		return getDependencySets( stopOnFailure, false );
+	}
 }

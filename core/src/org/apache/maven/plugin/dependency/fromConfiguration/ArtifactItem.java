@@ -22,8 +22,9 @@ package org.apache.maven.plugin.dependency.fromConfiguration;
 import java.io.File;
 
 import org.apache.maven.artifact.Artifact;
-import org.apache.maven.plugin.dependency.utils.DependencyUtil;
 import org.codehaus.plexus.util.StringUtils;
+
+import com.coderplus.apacheutils.DependencyUtil;
 
 /**
  * ArtifactItem represents information specified in the plugin configuration
