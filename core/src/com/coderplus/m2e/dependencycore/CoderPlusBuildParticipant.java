@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.apache.maven.RepositoryUtils;
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.DefaultArtifact;
 import org.apache.maven.artifact.handler.ArtifactHandler;
@@ -459,35 +460,11 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 		if(file.isDirectory()){
 			file = new File(maven.getLocalRepository().getBasedir(),maven.getLocalRepository().pathOf(artifact));
 		}
-		Map props = null;
-		if ("system".equals(artifact.getScope())) {
-			String localPath = (artifact.getFile() != null) ? artifact
-					.getFile().getPath() : "";
-					props  = Collections.singletonMap("localPath", localPath);
-		}
-
-		String version = artifact.getVersion();
-		if ((version == null) && (artifact.getVersionRange() != null)) {
-			version = artifact.getVersionRange().toString();
-		}
-
-
-		org.eclipse.aether.artifact.Artifact mainArtifact  = new org.eclipse.aether.artifact.DefaultArtifact(
-				artifact.getGroupId(), artifact.getArtifactId(),
-				artifact.getClassifier(), artifact.getArtifactHandler()
-				.getExtension(), version, props, newArtifactType(
-						artifact.getType(), artifact.getArtifactHandler()));
-
+		
+		org.eclipse.aether.artifact.Artifact mainArtifact  = RepositoryUtils.toArtifact(artifact);
 		mainArtifact = mainArtifact.setFile(file);
 		request.addArtifact(mainArtifact);
 		repoSystem.install(LegacyLocalRepositoryManager.overlay(targetRepository, null, null), request);
-	}
-
-	public static ArtifactType newArtifactType(String id,
-			ArtifactHandler handler) {
-		return new DefaultArtifactType(id, handler.getExtension(),
-				handler.getClassifier(), handler.getLanguage(),
-				handler.isAddedToClasspath(), handler.isIncludesDependencies());
 	}
 
 	private Artifact getResolvedPomArtifact(Artifact artifact) {
@@ -526,8 +503,7 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 		String destFileName = DependencyUtil.getFormattedFileName( artifact, stripVersion2, prependGroupId2, 
 				useBaseVersion2, stripClassifier2 );
 
-		File destDir;
-		destDir = DependencyUtil.getFormattedOutputDirectory( useSubDirectoryPerScope, useSubDirectoryPerType,
+		File destDir = DependencyUtil.getFormattedOutputDirectory( useSubDirectoryPerScope, useSubDirectoryPerType,
 				useSubDirectoryPerArtifact, useRepositoryLayout,
 				stripVersion, globalOutputDirectory, artifact );
 		File destFile = new File( destDir, destFileName );
