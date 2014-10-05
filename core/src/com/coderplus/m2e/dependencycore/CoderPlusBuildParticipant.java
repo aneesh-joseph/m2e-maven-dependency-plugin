@@ -15,20 +15,22 @@
 package com.coderplus.m2e.dependencycore;
 import java.beans.PropertyDescriptor;
 import java.io.File;
-import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.DefaultArtifact;
+import org.apache.maven.artifact.handler.ArtifactHandler;
 import org.apache.maven.artifact.handler.DefaultArtifactHandler;
+import org.apache.maven.artifact.installer.ArtifactInstallationException;
 import org.apache.maven.artifact.repository.ArtifactRepository;
-import org.apache.maven.artifact.repository.DefaultArtifactRepository;
+import org.apache.maven.artifact.repository.LegacyLocalRepositoryManager;
 import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.versioning.InvalidVersionSpecificationException;
 import org.apache.maven.artifact.versioning.VersionRange;
@@ -65,10 +67,12 @@ import org.codehaus.plexus.components.io.fileselectors.IncludeExcludeFileSelecto
 import org.codehaus.plexus.logging.console.ConsoleLogger;
 import org.codehaus.plexus.util.FileUtils;
 import org.codehaus.plexus.util.StringUtils;
+import org.eclipse.aether.artifact.ArtifactType;
+import org.eclipse.aether.artifact.DefaultArtifactType;
+import org.eclipse.aether.installation.InstallRequest;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IncrementalProjectBuilder;
-import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.m2e.core.MavenPlugin;
@@ -325,10 +329,10 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 					unpack( artifact, destDir, includes, excludes );
 				}
 
-				for ( Artifact artifact : dss.getSkippedDependencies() )
+				/*	for ( Artifact artifact : dss.getSkippedDependencies() )
 				{
-					// getLog().info( artifact.getFile().getName() + " already exists in destination." );
-				}
+					 getLog().info( artifact.getFile().getName() + " already exists in destination." );
+				}*/
 			} else {
 				//copy dependencies
 				Set<Artifact> artifacts = dss.getResolvedDependencies();
@@ -391,20 +395,130 @@ public class CoderPlusBuildParticipant extends MojoExecutionBuildParticipant {
 	}
 
 
-	private void copyPoms(File globalOutputDirectory2, Set<Artifact> skippedArtifacts, boolean stripVersion2,
-			boolean stripClassifier2) {
-		// TODO Auto-generated method stub
+	private void copyPoms(File destDir, Set<Artifact> artifacts, boolean stripVersion,
+			boolean stripClassifier) throws Exception {
+        for ( Artifact artifact : artifacts )
+        {
+            Artifact pomArtifact = getResolvedPomArtifact( artifact );
 
+            // Copy the pom
+            if ( pomArtifact.getFile() != null && pomArtifact.getFile().exists() )
+            {
+                File pomDestFile =
+                    new File( destDir, DependencyUtil.getFormattedFileName( pomArtifact, stripVersion, prependGroupId,
+                                                                            useBaseVersion, stripClassifier ) );
+                if ( !pomDestFile.exists() )
+                {
+                    copyFile( pomArtifact.getFile(), pomDestFile,pomArtifact );
+                }
+            }
+        }
+    }
+
+	private void copyPoms(File destDir, Set<Artifact> artifacts, boolean stripVersion) throws Exception {
+		copyPoms( destDir, artifacts, stripVersion, false );
 	}
 
-	private void copyPoms(File globalOutputDirectory2, Set<Artifact> artifacts, boolean stripVersion2) {
-		// TODO Auto-generated method stub
+	private void installArtifact(Artifact artifact, ArtifactRepository targetRepository) throws Exception {
+		try
+		{
+			if ( "pom".equals( artifact.getType() ) )
+			{
+				install( artifact.getFile(), artifact, targetRepository );
+				installBaseSnapshot( artifact, targetRepository );
+			}
+			else
+			{
+				install( artifact.getFile(), artifact, targetRepository );
+				installBaseSnapshot( artifact, targetRepository );
 
+				if ( copyPom )
+				{
+					Artifact pomArtifact = getResolvedPomArtifact( artifact );
+					if ( pomArtifact.getFile() != null && pomArtifact.getFile().exists() )
+					{
+						install( pomArtifact.getFile(), pomArtifact, targetRepository );
+						installBaseSnapshot( pomArtifact, targetRepository );
+					}
+				}
+			}
+		}
+		catch ( ArtifactInstallationException e )
+		{
+			// getLog().warn( "unable to install " + artifact, e );
+		}
 	}
 
-	private void installArtifact(Artifact artifact, ArtifactRepository targetRepository) {
-		// TODO Auto-generated method stub
+	private void install(File file,Artifact artifact, ArtifactRepository targetRepository) throws Exception{
+		ContainerConfiguration config = new DefaultContainerConfiguration();
+		config.setAutoWiring( true );
+		config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
+		org.eclipse.aether.RepositorySystem  repoSystem =new DefaultPlexusContainer( config ).lookup( org.eclipse.aether.RepositorySystem.class );;
+		InstallRequest request = new InstallRequest();
 
+		if(file.isDirectory()){
+			file = new File(maven.getLocalRepository().getBasedir(),maven.getLocalRepository().pathOf(artifact));
+		}
+		Map props = null;
+		if ("system".equals(artifact.getScope())) {
+			String localPath = (artifact.getFile() != null) ? artifact
+					.getFile().getPath() : "";
+					props  = Collections.singletonMap("localPath", localPath);
+		}
+
+		String version = artifact.getVersion();
+		if ((version == null) && (artifact.getVersionRange() != null)) {
+			version = artifact.getVersionRange().toString();
+		}
+
+
+		org.eclipse.aether.artifact.Artifact mainArtifact  = new org.eclipse.aether.artifact.DefaultArtifact(
+				artifact.getGroupId(), artifact.getArtifactId(),
+				artifact.getClassifier(), artifact.getArtifactHandler()
+				.getExtension(), version, props, newArtifactType(
+						artifact.getType(), artifact.getArtifactHandler()));
+
+		mainArtifact = mainArtifact.setFile(file);
+		request.addArtifact(mainArtifact);
+		repoSystem.install(LegacyLocalRepositoryManager.overlay(targetRepository, null, null), request);
+	}
+
+	public static ArtifactType newArtifactType(String id,
+			ArtifactHandler handler) {
+		return new DefaultArtifactType(id, handler.getExtension(),
+				handler.getClassifier(), handler.getLanguage(),
+				handler.isAddedToClasspath(), handler.isIncludesDependencies());
+	}
+
+	private Artifact getResolvedPomArtifact(Artifact artifact) {
+		Artifact pomArtifact = new DefaultArtifact( artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion(),Artifact.SCOPE_COMPILE , "pom", null,new DefaultArtifactHandler("pom"));
+		// Resolve the pom artifact using repos
+		try
+		{
+			ContainerConfiguration config = new DefaultContainerConfiguration();
+			config.setAutoWiring( true );
+			config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
+			RepositorySystem system =new DefaultPlexusContainer( config ).lookup( RepositorySystem.class );
+			ArtifactResolutionRequest request = new ArtifactResolutionRequest();
+			request.setArtifact(pomArtifact);
+			request.setRemoteRepositories(maven.getArtifactRepositories());
+			request.setLocalRepository(getLocal());
+			//resolve the artifact
+			system.resolve(request);
+		}
+		catch ( Exception e )
+		{
+			//getLog().info( e.getMessage() );
+		}
+		return pomArtifact;
+	}
+
+	private void installBaseSnapshot(Artifact artifact, ArtifactRepository targetRepository) throws Exception {
+		if ( artifact.isSnapshot() && !artifact.getBaseVersion().equals( artifact.getVersion() ) )
+		{	
+			Artifact baseArtifact = new DefaultArtifact( artifact.getGroupId(), artifact.getArtifactId(), artifact.getBaseVersion(),artifact.getScope() ,artifact.getType(), artifact.getClassifier(),new DefaultArtifactHandler(artifact.getType()));
+			install( artifact.getFile(), baseArtifact, targetRepository );
+		}
 	}
 
 	private void copyArtifact(Artifact artifact, boolean stripVersion2, boolean prependGroupId2,

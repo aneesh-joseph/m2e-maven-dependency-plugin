@@ -68,8 +68,8 @@
 			<url>http://repository.sonatype.org/content/groups/sonatype-public-grid</url>
 		</repository>
 		<repository>
-			<id>eclipse-kepler</id>
-			<url>http://download.eclipse.org/releases/kepler</url>
+			<id>eclipse-luna</id>
+			<url>http://download.eclipse.org/releases/luna</url>
 			<layout>p2</layout>
 		</repository>
 		<repository>
