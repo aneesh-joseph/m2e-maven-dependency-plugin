@@ -15,7 +15,7 @@
 			</pluginExecutionFilter>
 			<action>
 				<configurator>
-					<id>com.coderplus.m2e.dependencycore.CoderPlusProjectConfigurator</id>
+					<id>com.ianbrandt.tools.m2e.mdp.core.MdpProjectConfigurator</id>
 				</configurator>
 			</action>
 		</pluginExecution>
