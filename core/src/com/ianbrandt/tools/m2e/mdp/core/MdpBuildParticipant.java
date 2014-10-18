@@ -60,9 +60,9 @@ public class MdpBuildParticipant extends MojoExecutionBuildParticipant {
 		Set<File> outputDirectories;
 
 		if(Constants.COPY_GOAL.equals(goal)||Constants.UNPACK_GOAL.equals(goal)){
-			outputDirectories=new BuildHelper(maven,mojoExecution,getMavenProjectFacade().getMavenProject()).processCopyOrUnpack();
+			outputDirectories=new BuildHelper(maven,mojoExecution,getMavenProjectFacade().getMavenProject(),buildContext).processCopyOrUnpack();
 		} else {
-			outputDirectories=new BuildHelper(maven,mojoExecution,getMavenProjectFacade().getMavenProject()).processDependencies();
+			outputDirectories=new BuildHelper(maven,mojoExecution,getMavenProjectFacade().getMavenProject(),buildContext).processDependencies();
 		}
 
 		for(File outputDirectory: outputDirectories){

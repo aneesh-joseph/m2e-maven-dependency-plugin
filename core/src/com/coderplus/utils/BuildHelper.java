@@ -17,8 +17,8 @@ import org.apache.maven.artifact.DefaultArtifact;
 import org.apache.maven.artifact.handler.DefaultArtifactHandler;
 import org.apache.maven.artifact.installer.ArtifactInstallationException;
 import org.apache.maven.artifact.repository.ArtifactRepository;
+import org.apache.maven.artifact.repository.DefaultArtifactRepository;
 import org.apache.maven.artifact.repository.LegacyLocalRepositoryManager;
-import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
 import org.apache.maven.artifact.versioning.InvalidVersionSpecificationException;
 import org.apache.maven.artifact.versioning.VersionRange;
 import org.apache.maven.model.Dependency;
@@ -30,7 +30,7 @@ import org.apache.maven.project.DefaultMavenProjectBuilder;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.MavenProjectBuilder;
 import org.apache.maven.project.ProjectBuildingException;
-import org.apache.maven.repository.RepositorySystem;
+import org.apache.maven.repository.internal.DefaultVersionResolver;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactFilterException;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactIdFilter;
 import org.apache.maven.shared.artifact.filter.collection.ClassifierFilter;
@@ -54,15 +54,39 @@ import org.codehaus.plexus.components.io.fileselectors.IncludeExcludeFileSelecto
 import org.codehaus.plexus.logging.console.ConsoleLogger;
 import org.codehaus.plexus.util.FileUtils;
 import org.codehaus.plexus.util.StringUtils;
+import org.eclipse.aether.DefaultRepositorySystemSession;
+import org.eclipse.aether.RepositorySystem;
+import org.eclipse.aether.RepositorySystemSession;
+import org.eclipse.aether.impl.OfflineController;
+import org.eclipse.aether.impl.RemoteRepositoryManager;
+import org.eclipse.aether.impl.RepositoryConnectorProvider;
+import org.eclipse.aether.impl.RepositoryEventDispatcher;
+import org.eclipse.aether.impl.SyncContextFactory;
+import org.eclipse.aether.impl.UpdatePolicyAnalyzer;
 import org.eclipse.aether.installation.InstallRequest;
-import org.eclipse.core.runtime.CoreException;
+import org.eclipse.aether.internal.impl.DefaultArtifactResolver;
+import org.eclipse.aether.internal.impl.DefaultFileProcessor;
+import org.eclipse.aether.internal.impl.DefaultInstaller;
+import org.eclipse.aether.internal.impl.DefaultMetadataResolver;
+import org.eclipse.aether.internal.impl.DefaultOfflineController;
+import org.eclipse.aether.internal.impl.DefaultRemoteRepositoryManager;
+import org.eclipse.aether.internal.impl.DefaultRepositoryConnectorProvider;
+import org.eclipse.aether.internal.impl.DefaultRepositoryEventDispatcher;
+import org.eclipse.aether.internal.impl.DefaultRepositorySystem;
+import org.eclipse.aether.internal.impl.DefaultSyncContextFactory;
+import org.eclipse.aether.internal.impl.DefaultUpdateCheckManager;
+import org.eclipse.aether.internal.impl.DefaultUpdatePolicyAnalyzer;
+import org.eclipse.aether.resolution.ArtifactRequest;
+import org.eclipse.aether.resolution.ArtifactResult;
+import org.eclipse.aether.spi.io.FileProcessor;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.m2e.core.embedder.IMaven;
+import org.sonatype.plexus.build.incremental.BuildContext;
 
-import com.coderplus.apacheutils.DependencyStatusSets;
-import com.coderplus.apacheutils.DependencyUtil;
 import com.coderplus.apacheutils.translators.ClassifierTypeTranslator;
 import com.coderplus.apacheutils.translators.resolvers.DefaultArtifactsResolver;
+import com.coderplus.utils.apache.DependencyStatusSets;
+import com.coderplus.utils.apache.DependencyUtil;
 
 @SuppressWarnings("deprecation")
 public class BuildHelper {
@@ -107,12 +131,16 @@ public class BuildHelper {
 	private boolean failOnMissingClassifierArtifact;
 	private boolean copyPom;
 	private MojoExecution execution;
+	private RepositorySystem repoSystem;
+	private RepositorySystemSession session;
+	private BuildContext buildContext;
 
-	public BuildHelper(IMaven maven, MojoExecution execution, MavenProject mavenProject) throws CoreException {
+	public BuildHelper(IMaven maven, MojoExecution execution, MavenProject mavenProject, BuildContext buildContext) throws Exception {
 		this.execution = execution;
 		this.project = mavenProject;
 		this.maven=maven;
 		this.goal = execution.getGoal();
+		this.buildContext = buildContext;
 		this.skip =  Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, "skip",Boolean.class, new NullProgressMonitor()));
 		this.globalOutputDirectory =maven.getMojoParameterValue(project, execution, Constants.OUTPUT_DIRECTORY,File.class, new NullProgressMonitor());
 		this.overWriteReleases = Boolean.TRUE.equals(maven.getMojoParameterValue(project, execution, Constants.OVER_WRITE_RELEASES,Boolean.class, new NullProgressMonitor()));
@@ -146,6 +174,59 @@ public class BuildHelper {
 		this.classifier = maven.getMojoParameterValue(project, execution, Constants.CLASSIFIER,String.class, new NullProgressMonitor());
 		String temp=maven.getMojoParameterValue(project, execution, Constants.TYPE,String.class, new NullProgressMonitor());
 		this.type = temp!=null? temp:"";
+
+		try{
+			ContainerConfiguration config = new DefaultContainerConfiguration();
+			config.setAutoWiring( true );
+			config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
+			repoSystem =new DefaultPlexusContainer( config ).lookup( RepositorySystem.class );
+		} catch(Exception e) {
+			//FIXME:Why can't we always lookup a  RepositorySystem from the container?
+			DefaultRepositorySystem repoSystem = new DefaultRepositorySystem();
+			SyncContextFactory syncContextFactory = new DefaultSyncContextFactory();
+			DefaultArtifactResolver artifactResolver = new DefaultArtifactResolver();
+			FileProcessor fileProcessor = new DefaultFileProcessor();
+			RepositoryEventDispatcher repositoryEventDispatcher = new DefaultRepositoryEventDispatcher();
+			OfflineController offlineController= new DefaultOfflineController();
+			DefaultVersionResolver versionResolver = new DefaultVersionResolver();
+			RemoteRepositoryManager remoteRepositoryManager = new DefaultRemoteRepositoryManager();
+			DefaultInstaller installer = new DefaultInstaller();
+			DefaultMetadataResolver metadataResolver = new DefaultMetadataResolver();
+			metadataResolver.setRemoteRepositoryManager(remoteRepositoryManager );
+			metadataResolver.setSyncContextFactory(syncContextFactory);
+			metadataResolver.setRepositoryEventDispatcher(repositoryEventDispatcher);
+			RepositoryConnectorProvider repositoryConnectorProvider = new DefaultRepositoryConnectorProvider();
+			metadataResolver.setRepositoryConnectorProvider(repositoryConnectorProvider );
+			DefaultUpdateCheckManager updateCheckManager = new DefaultUpdateCheckManager();
+			UpdatePolicyAnalyzer updatePolicyAnalyzer = new DefaultUpdatePolicyAnalyzer();
+			updateCheckManager.setUpdatePolicyAnalyzer(updatePolicyAnalyzer );
+			metadataResolver.setUpdateCheckManager(updateCheckManager);
+			metadataResolver.setOfflineController(offlineController);
+			versionResolver.setMetadataResolver(metadataResolver );
+			versionResolver.setRepositoryEventDispatcher(repositoryEventDispatcher);
+			artifactResolver .setSyncContextFactory(syncContextFactory );
+			artifactResolver.setRepositoryEventDispatcher(repositoryEventDispatcher);
+			artifactResolver.setVersionResolver(versionResolver );
+			artifactResolver.setOfflineController(offlineController);
+			artifactResolver.setFileProcessor(fileProcessor);
+			repoSystem.setArtifactResolver(artifactResolver );
+			repoSystem.setSyncContextFactory(syncContextFactory );
+			installer.setSyncContextFactory(syncContextFactory);
+			installer.setRepositoryEventDispatcher(repositoryEventDispatcher);
+			installer.setFileProcessor(fileProcessor);
+			repoSystem.setInstaller(installer );
+			this.repoSystem = repoSystem;
+		}
+		
+		session= LegacyLocalRepositoryManager.overlay(getLocal(), null, null);
+		
+		if(session instanceof  DefaultRepositorySystemSession){
+			DefaultRepositorySystemSession tmp = (DefaultRepositorySystemSession) session;
+			//Remove the WorkspaceReader so that the artifact is not resolved from the Workspace
+			tmp.setWorkspaceReader(null);
+			session=tmp;
+		}
+
 	}
 
 	public Set<File> processCopyOrUnpack() throws Exception {
@@ -208,9 +289,9 @@ public class BuildHelper {
 					} else if(Constants.UNPACK_GOAL.equals(goal)){
 						//if unpack, then unpack the artifact using plexus unarchivers.
 						unpack(artifactItem.getArtifact(),artifactItem.getOutputDirectory(), artifactItem.getIncludes(),artifactItem.getExcludes() );
+						//add the output directory to the set to be refreshed.
+						refreshableDirectories.add(artifactItem.getOutputDirectory());
 					}
-					//add the output directory to the set to be refreshed.
-					refreshableDirectories.add(artifactItem.getOutputDirectory());
 				}
 				else
 				{
@@ -258,16 +339,12 @@ public class BuildHelper {
 				{
 					try
 					{
-						ContainerConfiguration config = new DefaultContainerConfiguration();
-						config.setAutoWiring( true );
-						config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
-						RepositorySystem system =new DefaultPlexusContainer( config ).lookup( RepositorySystem.class );
-
-						ArtifactRepository targetRepository = system.createArtifactRepository( "local", globalOutputDirectory.toURL().toExternalForm(),  maven.getLocalRepository().getLayout(), maven.getLocalRepository().getSnapshots(),  maven.getLocalRepository().getReleases() );
+						ArtifactRepository targetRepository = new DefaultArtifactRepository("local",globalOutputDirectory.toURL().toExternalForm(),maven.getLocalRepository().getLayout(),false);
 
 						for ( Artifact artifact : artifacts )
 						{
 							installArtifact( artifact, targetRepository );
+							refreshableDirectories.add(globalOutputDirectory);
 						}
 					}
 					catch ( MalformedURLException e )
@@ -405,17 +482,11 @@ public class BuildHelper {
 			artifact =  new DefaultArtifact( artifactItem.getGroupId(), artifactItem.getArtifactId(), vr,Artifact.SCOPE_COMPILE , artifactItem.getType(), artifactItem.getClassifier(),new DefaultArtifactHandler(artifactItem.getType()));
 		}
 
-		ContainerConfiguration config = new DefaultContainerConfiguration();
-		config.setAutoWiring( true );
-		config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
-		RepositorySystem system =new DefaultPlexusContainer( config ).lookup( RepositorySystem.class );
-		ArtifactResolutionRequest request = new ArtifactResolutionRequest();
-		request.setArtifact(artifact);
-		request.setRemoteRepositories(maven.getArtifactRepositories());
-		request.setLocalRepository(getLocal());
+		org.eclipse.aether.artifact.Artifact aetherArtifact = RepositoryUtils.toArtifact(artifact);
+		ArtifactRequest request = new ArtifactRequest(aetherArtifact,RepositoryUtils.toRepos(maven.getArtifactRepositories()),"");
 		//resolve the artifact
-		system.resolve(request);
-		return artifact;
+		ArtifactResult result = repoSystem.resolveArtifact(session, request);
+		return RepositoryUtils.toArtifact(result.getArtifact());
 	}
 
 	private boolean checkIfProcessingNeeded(ArtifactItem artifactItem) {
@@ -424,19 +495,12 @@ public class BuildHelper {
 	}
 
 	private ArtifactRepository getLocal() throws Exception {
-		ContainerConfiguration config = new DefaultContainerConfiguration();
-		config.setAutoWiring( true );
-		config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
-		RepositorySystem system =new DefaultPlexusContainer( config ).lookup( RepositorySystem.class );
-		ArtifactResolutionRequest request = new ArtifactResolutionRequest();
-		request.setArtifact(project.getArtifact());
-		request.setRemoteRepositories(maven.getArtifactRepositories());
 		ArtifactRepository localRepo = maven.getLocalRepository();
 		if ( this.localRepositoryDirectory != null )
 		{
 			// create a new local repo using existing layout, snapshots, and releases policy
 			String url = "file://" + this.localRepositoryDirectory.getAbsolutePath();
-			localRepo = system.createArtifactRepository( localRepo.getId(), url, localRepo.getLayout(),localRepo.getSnapshots(), localRepo.getReleases() );
+			localRepo = new DefaultArtifactRepository(localRepo.getId(),url,maven.getLocalRepository().getLayout(),false);
 
 		}
 		return localRepo;
@@ -501,6 +565,7 @@ public class BuildHelper {
 		}
 		if(srcFile.exists()){
 			FileUtils.copyFile(srcFile, destFile );
+			buildContext.refresh(destFile);
 		} else {
 			throw new Exception("Unable to resolve artifact"+artifact.getGroupId()+":"+artifact.getArtifactId()+":"+artifact.getVersion());
 		}
@@ -745,16 +810,11 @@ public class BuildHelper {
 		// Resolve the pom artifact using repos
 		try
 		{
-			ContainerConfiguration config = new DefaultContainerConfiguration();
-			config.setAutoWiring( true );
-			config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
-			RepositorySystem system =new DefaultPlexusContainer( config ).lookup( RepositorySystem.class );
-			ArtifactResolutionRequest request = new ArtifactResolutionRequest();
-			request.setArtifact(pomArtifact);
-			request.setRemoteRepositories(maven.getArtifactRepositories());
-			request.setLocalRepository(getLocal());
+			ArtifactRequest request = new ArtifactRequest(RepositoryUtils.toArtifact(pomArtifact),RepositoryUtils.toRepos(maven.getArtifactRepositories()),"");
 			//resolve the artifact
-			system.resolve(request);
+			ArtifactResult result = repoSystem.resolveArtifact(session, request);
+			return RepositoryUtils.toArtifact(result.getArtifact());
+
 		}
 		catch ( Exception e )
 		{
@@ -807,17 +867,10 @@ public class BuildHelper {
 			}
 			try
 			{
-				ContainerConfiguration config = new DefaultContainerConfiguration();
-				config.setAutoWiring( true );
-				config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
-				RepositorySystem system =new DefaultPlexusContainer( config ).lookup( RepositorySystem.class );
-				ArtifactResolutionRequest request = new ArtifactResolutionRequest();
-				request.setArtifact(project.getArtifact());
-				request.setRemoteRepositories(maven.getArtifactRepositories());
-				request.setLocalRepository(getLocal());
+				ArtifactRequest request = new ArtifactRequest(RepositoryUtils.toArtifact(project.getArtifact()),RepositoryUtils.toRepos(maven.getArtifactRepositories()),"");
 				//resolve the artifact
-				system.resolve(request);
-
+				ArtifactResult result = repoSystem.resolveArtifact(session, request);
+				project.setArtifact(RepositoryUtils.toArtifact(result.getArtifact()));
 
 			}
 			catch ( Exception e )
@@ -849,9 +902,8 @@ public class BuildHelper {
 			artifacts = status.getResolvedDependencies();
 
 			// resolve the rest of the artifacts
-			DefaultArtifactsResolver artifactsResolver =
-					new DefaultArtifactsResolver(this.getLocal(), maven.getArtifactRepositories(), stopOnFailure );
-			resolvedArtifacts = artifactsResolver.resolve( artifacts);
+			DefaultArtifactsResolver artifactsResolver = new DefaultArtifactsResolver(this.getLocal(), maven.getArtifactRepositories(), stopOnFailure );
+			resolvedArtifacts = artifactsResolver.resolve( artifacts,repoSystem);
 
 			// calculate the artifacts not resolved.
 			unResolvedArtifacts.addAll( artifacts );
@@ -888,10 +940,6 @@ public class BuildHelper {
 	}
 
 	private void install(File file,Artifact artifact, ArtifactRepository targetRepository) throws Exception{
-		ContainerConfiguration config = new DefaultContainerConfiguration();
-		config.setAutoWiring( true );
-		config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
-		org.eclipse.aether.RepositorySystem  repoSystem =new DefaultPlexusContainer( config ).lookup( org.eclipse.aether.RepositorySystem.class );;
 		InstallRequest request = new InstallRequest();
 
 		if(file.isDirectory()){

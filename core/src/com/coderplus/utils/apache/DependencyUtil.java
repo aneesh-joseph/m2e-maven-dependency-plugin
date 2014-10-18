@@ -1,4 +1,4 @@
-package com.coderplus.apacheutils;
+package com.coderplus.utils.apache;
 
 /*
  * Licensed to the Apache Software Foundation (ASF) under one

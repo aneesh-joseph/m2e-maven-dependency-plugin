@@ -23,15 +23,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import org.apache.maven.RepositoryUtils;
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.repository.ArtifactRepository;
-import org.apache.maven.artifact.resolver.ArtifactResolutionRequest;
+import org.apache.maven.artifact.repository.LegacyLocalRepositoryManager;
 import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.repository.RepositorySystem;
-import org.codehaus.plexus.ContainerConfiguration;
-import org.codehaus.plexus.DefaultContainerConfiguration;
-import org.codehaus.plexus.DefaultPlexusContainer;
-import org.codehaus.plexus.PlexusConstants;
+import org.eclipse.aether.resolution.ArtifactRequest;
+import org.eclipse.aether.resolution.ArtifactResult;
 
 /**
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
@@ -60,7 +58,7 @@ public class DefaultArtifactsResolver
      * @see org.apache.mojo.dependency.utils.resolvers.ArtifactsResolver#resolve(java.util.Set,
      *      org.apache.maven.plugin.logging.Log)
      */
-    public Set<Artifact> resolve( Set<Artifact> artifacts)
+    public Set<Artifact> resolve( Set<Artifact> artifacts, org.eclipse.aether.RepositorySystem repoSystem)
         throws MojoExecutionException
     {
 
@@ -69,25 +67,21 @@ public class DefaultArtifactsResolver
         {
             try
             {
-            	ContainerConfiguration config = new DefaultContainerConfiguration();
-        		config.setAutoWiring( true );
-        		config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
-        		RepositorySystem system =new DefaultPlexusContainer( config ).lookup( RepositorySystem.class );
-        		ArtifactResolutionRequest request = new ArtifactResolutionRequest();
-        		request.setArtifact(artifact);
-        		request.setRemoteRepositories(remoteRepositories);
-        		request.setLocalRepository(local);
-        		//resolve the artifact
-        		system.resolve(request);
-                resolvedArtifacts.add( artifact );
+        		ArtifactRequest request = new ArtifactRequest(RepositoryUtils.toArtifact(artifact),RepositoryUtils.toRepos(remoteRepositories),"");
+        		ArtifactResult result = repoSystem.resolveArtifact(LegacyLocalRepositoryManager.overlay(local, null, null), request);
+        		if(result.getArtifact() != null){
+        			resolvedArtifacts.add( RepositoryUtils.toArtifact(result.getArtifact()) );
+        		} else {
+        			throw new Exception("No valid artifact resolved");
+        		}
             }
-            catch (Exception ex )
+            catch (Exception ex)
             {
-                // an error occurred during resolution, log it an continue
-                if ( stopOnFailure )
-                {
-                    throw new MojoExecutionException( "error resolving: " + artifact.getId(), ex );
-                }
+            	// an error occurred during resolution, log it an continue
+            	if ( stopOnFailure )
+            	{
+            		throw new MojoExecutionException( "error resolving: " + artifact.getId(), ex );
+            	}
             }
 
         }
