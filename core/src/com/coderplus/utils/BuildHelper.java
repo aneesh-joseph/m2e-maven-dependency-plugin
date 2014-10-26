@@ -30,7 +30,7 @@ import org.apache.maven.project.DefaultMavenProjectBuilder;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.MavenProjectBuilder;
 import org.apache.maven.project.ProjectBuildingException;
-import org.apache.maven.repository.internal.DefaultVersionResolver;
+import org.apache.maven.repository.internal.MavenRepositorySystemUtils;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactFilterException;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactIdFilter;
 import org.apache.maven.shared.artifact.filter.collection.ClassifierFilter;
@@ -39,10 +39,6 @@ import org.apache.maven.shared.artifact.filter.collection.GroupIdFilter;
 import org.apache.maven.shared.artifact.filter.collection.ProjectTransitivityFilter;
 import org.apache.maven.shared.artifact.filter.collection.ScopeFilter;
 import org.apache.maven.shared.artifact.filter.collection.TypeFilter;
-import org.codehaus.plexus.ContainerConfiguration;
-import org.codehaus.plexus.DefaultContainerConfiguration;
-import org.codehaus.plexus.DefaultPlexusContainer;
-import org.codehaus.plexus.PlexusConstants;
 import org.codehaus.plexus.archiver.AbstractUnArchiver;
 import org.codehaus.plexus.archiver.bzip2.BZip2UnArchiver;
 import org.codehaus.plexus.archiver.gzip.GZipUnArchiver;
@@ -57,28 +53,10 @@ import org.codehaus.plexus.util.StringUtils;
 import org.eclipse.aether.DefaultRepositorySystemSession;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
-import org.eclipse.aether.impl.OfflineController;
-import org.eclipse.aether.impl.RemoteRepositoryManager;
-import org.eclipse.aether.impl.RepositoryConnectorProvider;
-import org.eclipse.aether.impl.RepositoryEventDispatcher;
-import org.eclipse.aether.impl.SyncContextFactory;
-import org.eclipse.aether.impl.UpdatePolicyAnalyzer;
+import org.eclipse.aether.impl.DefaultServiceLocator;
 import org.eclipse.aether.installation.InstallRequest;
-import org.eclipse.aether.internal.impl.DefaultArtifactResolver;
-import org.eclipse.aether.internal.impl.DefaultFileProcessor;
-import org.eclipse.aether.internal.impl.DefaultInstaller;
-import org.eclipse.aether.internal.impl.DefaultMetadataResolver;
-import org.eclipse.aether.internal.impl.DefaultOfflineController;
-import org.eclipse.aether.internal.impl.DefaultRemoteRepositoryManager;
-import org.eclipse.aether.internal.impl.DefaultRepositoryConnectorProvider;
-import org.eclipse.aether.internal.impl.DefaultRepositoryEventDispatcher;
-import org.eclipse.aether.internal.impl.DefaultRepositorySystem;
-import org.eclipse.aether.internal.impl.DefaultSyncContextFactory;
-import org.eclipse.aether.internal.impl.DefaultUpdateCheckManager;
-import org.eclipse.aether.internal.impl.DefaultUpdatePolicyAnalyzer;
 import org.eclipse.aether.resolution.ArtifactRequest;
 import org.eclipse.aether.resolution.ArtifactResult;
-import org.eclipse.aether.spi.io.FileProcessor;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.m2e.core.embedder.IMaven;
 import org.sonatype.plexus.build.incremental.BuildContext;
@@ -175,48 +153,7 @@ public class BuildHelper {
 		String temp=maven.getMojoParameterValue(project, execution, Constants.TYPE,String.class, new NullProgressMonitor());
 		this.type = temp!=null? temp:"";
 
-		try{
-			ContainerConfiguration config = new DefaultContainerConfiguration();
-			config.setAutoWiring( true );
-			config.setClassPathScanning( PlexusConstants.SCANNING_INDEX );
-			repoSystem =new DefaultPlexusContainer( config ).lookup( RepositorySystem.class );
-		} catch(Exception e) {
-			//FIXME:Why can't we always lookup a  RepositorySystem from the container?
-			DefaultRepositorySystem repoSystem = new DefaultRepositorySystem();
-			SyncContextFactory syncContextFactory = new DefaultSyncContextFactory();
-			DefaultArtifactResolver artifactResolver = new DefaultArtifactResolver();
-			FileProcessor fileProcessor = new DefaultFileProcessor();
-			RepositoryEventDispatcher repositoryEventDispatcher = new DefaultRepositoryEventDispatcher();
-			OfflineController offlineController= new DefaultOfflineController();
-			DefaultVersionResolver versionResolver = new DefaultVersionResolver();
-			RemoteRepositoryManager remoteRepositoryManager = new DefaultRemoteRepositoryManager();
-			DefaultInstaller installer = new DefaultInstaller();
-			DefaultMetadataResolver metadataResolver = new DefaultMetadataResolver();
-			metadataResolver.setRemoteRepositoryManager(remoteRepositoryManager );
-			metadataResolver.setSyncContextFactory(syncContextFactory);
-			metadataResolver.setRepositoryEventDispatcher(repositoryEventDispatcher);
-			RepositoryConnectorProvider repositoryConnectorProvider = new DefaultRepositoryConnectorProvider();
-			metadataResolver.setRepositoryConnectorProvider(repositoryConnectorProvider );
-			DefaultUpdateCheckManager updateCheckManager = new DefaultUpdateCheckManager();
-			UpdatePolicyAnalyzer updatePolicyAnalyzer = new DefaultUpdatePolicyAnalyzer();
-			updateCheckManager.setUpdatePolicyAnalyzer(updatePolicyAnalyzer );
-			metadataResolver.setUpdateCheckManager(updateCheckManager);
-			metadataResolver.setOfflineController(offlineController);
-			versionResolver.setMetadataResolver(metadataResolver );
-			versionResolver.setRepositoryEventDispatcher(repositoryEventDispatcher);
-			artifactResolver .setSyncContextFactory(syncContextFactory );
-			artifactResolver.setRepositoryEventDispatcher(repositoryEventDispatcher);
-			artifactResolver.setVersionResolver(versionResolver );
-			artifactResolver.setOfflineController(offlineController);
-			artifactResolver.setFileProcessor(fileProcessor);
-			repoSystem.setArtifactResolver(artifactResolver );
-			repoSystem.setSyncContextFactory(syncContextFactory );
-			installer.setSyncContextFactory(syncContextFactory);
-			installer.setRepositoryEventDispatcher(repositoryEventDispatcher);
-			installer.setFileProcessor(fileProcessor);
-			repoSystem.setInstaller(installer );
-			this.repoSystem = repoSystem;
-		}
+		repoSystem = newRepositorySystem();
 		
 		session= LegacyLocalRepositoryManager.overlay(getLocal(), null, null);
 		
@@ -951,6 +888,12 @@ public class BuildHelper {
 		request.addArtifact(mainArtifact);
 		repoSystem.install(LegacyLocalRepositoryManager.overlay(targetRepository, null, null), request);
 	}
+	
+	private static RepositorySystem newRepositorySystem()
+    {
+        DefaultServiceLocator locator = MavenRepositorySystemUtils.newServiceLocator();
+        return locator.getService( RepositorySystem.class );
+    }
 
 
 }
